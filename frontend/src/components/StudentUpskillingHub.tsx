@@ -6,15 +6,12 @@
  * This component groups roadmap progress, learning plans, AI coach output,
  * recommendations, and interview prep into one student-focused panel.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
-  AlertCircle,
   ArrowUpRight,
   BookOpen,
   Bot,
-  BookmarkPlus,
-  CheckCircle2,
   Compass,
   LineChart,
   Lightbulb,
@@ -35,7 +32,6 @@ import {
   Resume,
   StudentAICoachResponse,
   StudentRecommendations,
-  StudentResource,
 } from '@/types';
 import {
   askStudentAICoach,
@@ -51,94 +47,27 @@ import {
   updateRoadmapSkill,
   uploadResume,
 } from '@/lib/dashboardApi';
-import {
-  getSupportPlanResources,
-  getRoleStarterResources,
-  getSkillGapResources,
-  getTopResourceRecommendation,
-} from '@/lib/studentResources';
 import { useAuth } from '@/contexts/AuthContext';
 import { AnimatePresence, motion } from 'framer-motion';
+import { aiCoachFeatures, aiPromptSuggestions } from '@/components/studentUpskilling/constants';
+import { MAX_RESUME_FILE_SIZE_MB, shortDate, validatePdf } from '@/components/studentUpskilling/format';
+import { useStudentUpskillingInsights } from '@/components/studentUpskilling/insights';
+import FeedbackBanner from '@/components/studentUpskilling/FeedbackBanner';
+import StatCard from '@/components/studentUpskilling/StatCard';
+import NextStepCardView from '@/components/studentUpskilling/NextStepCardView';
+import SkillGapResourceCard from '@/components/studentUpskilling/SkillGapResourceCard';
+import StarterResourceLink from '@/components/studentUpskilling/StarterResourceLink';
+import JobRecommendationCard from '@/components/studentUpskilling/JobRecommendationCard';
+import {
+  AICoachFeature,
+  FeedbackState,
+  RoadmapStatus,
+} from '@/components/studentUpskilling/types';
 
 interface StudentUpskillingHubProps {
   recommendations: StudentRecommendations | null;
   onRefresh: () => Promise<void>;
 }
-
-type FeedbackTone = 'success' | 'error' | 'info';
-type RoadmapStatus = 'completed' | 'in_progress' | 'missing';
-
-interface FeedbackState {
-  tone: FeedbackTone;
-  text: string;
-}
-
-const MAX_RESUME_FILE_SIZE_MB = Math.max(
-  1,
-  Math.min(4.4, Number(process.env.NEXT_PUBLIC_MAX_RESUME_FILE_SIZE_MB || 4))
-);
-const MAX_RESUME_FILE_SIZE_BYTES = Math.floor(MAX_RESUME_FILE_SIZE_MB * 1024 * 1024);
-
-const scoreToPercent = (score: number) => {
-  if (!Number.isFinite(score)) return 0;
-  return Math.max(0, Math.min(100, score <= 1 ? Math.round(score * 100) : Math.round(score)));
-};
-
-const oneLine = (text: string | undefined, max = 98) => {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) return 'Recommended based on your current resume and skills.';
-  if (normalized.length <= max) return normalized;
-  return `${normalized.slice(0, max - 1)}...`;
-};
-
-const shortDate = (value: string | Date) =>
-  new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-const validatePdf = (candidate: File) => {
-  const isPdf = candidate.type === 'application/pdf' || candidate.name.toLowerCase().endsWith('.pdf');
-  if (!isPdf) return 'Invalid PDF. Please upload a valid resume PDF file.';
-  if (candidate.size > MAX_RESUME_FILE_SIZE_BYTES) {
-    return `File is too large. Maximum allowed size is ${MAX_RESUME_FILE_SIZE_MB}MB.`;
-  }
-  return null;
-};
-
-const aiCoachFeatures: Array<{
-  value: 'skill_gap' | 'resume_improvement' | 'interview_prep' | 'project_ideas' | 'study_plan';
-  label: string;
-}> = [
-  { value: 'skill_gap', label: 'Skill gap coach' },
-  { value: 'resume_improvement', label: 'Resume upgrade' },
-  { value: 'interview_prep', label: 'Interview prep' },
-  { value: 'project_ideas', label: 'Project ideas' },
-  { value: 'study_plan', label: 'Study plan' },
-];
-
-const aiPromptSuggestions: Record<
-  'skill_gap' | 'resume_improvement' | 'interview_prep' | 'project_ideas' | 'study_plan',
-  string[]
-> = {
-  skill_gap: [
-    'Rank my missing skills by hiring impact for backend roles.',
-    'Tell me the fastest skill to learn next to improve my match score.',
-  ],
-  resume_improvement: [
-    'Rewrite my strongest project bullets to sound more recruiter-friendly.',
-    'Show me what should move to the top of my resume for this role.',
-  ],
-  interview_prep: [
-    'Give me a 7-day backend interview revision plan.',
-    'Create likely technical and HR questions for my target role.',
-  ],
-  project_ideas: [
-    'Suggest 3 portfolio projects that close my biggest skill gaps.',
-    'Give me one project idea that can be built in 2 weeks.',
-  ],
-  study_plan: [
-    'Build a 30-day plan for my missing skills with weekly milestones.',
-    'Turn my gap list into a realistic evening study routine.',
-  ],
-};
 
 export default function StudentUpskillingHub({
   recommendations,
@@ -161,9 +90,7 @@ export default function StudentUpskillingHub({
   const [switchingRole, setSwitchingRole] = useState(false);
   const [updatingSkill, setUpdatingSkill] = useState<string | null>(null);
   const [savingJobId, setSavingJobId] = useState<string | null>(null);
-  const [aiFeature, setAiFeature] = useState<
-    'skill_gap' | 'resume_improvement' | 'interview_prep' | 'project_ideas' | 'study_plan'
-  >('skill_gap');
+  const [aiFeature, setAiFeature] = useState<AICoachFeature>('skill_gap');
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiCoachResponse, setAiCoachResponse] = useState<StudentAICoachResponse | null>(null);
@@ -181,7 +108,7 @@ export default function StudentUpskillingHub({
         setOverview(null);
         setLearningPlan(null);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       setFeedback({
         tone: 'error',
         text: getReadableErrorMessage(error, 'Unable to load dashboard data.'),
@@ -207,7 +134,7 @@ export default function StudentUpskillingHub({
           : await getLearningPlan(overview.roleId, duration);
         setLearningPlan(planData);
         return true;
-      } catch (error: any) {
+      } catch (error: unknown) {
         setFeedback({
           tone: 'error',
           text: getReadableErrorMessage(error, 'Unable to load learning plan.'),
@@ -250,192 +177,25 @@ export default function StudentUpskillingHub({
     void loadLearningPlanForDuration(learningDuration, false);
   }, [learningDuration, loadLearningPlanForDuration, overview?.roleId, resume?.id]);
 
-  const topRecommendedJobs = useMemo(() => {
-    return (recommendations?.recommendedJobs || []).slice(0, 3);
-  }, [recommendations?.recommendedJobs]);
-
-  const topMissingSkills = useMemo(() => {
-    const recommendationSkills = (recommendations?.missingSkills || []).slice(0, 8);
-    if (recommendationSkills.length > 0) return recommendationSkills;
-    return (overview?.missingSkills || []).slice(0, 8);
-  }, [overview?.missingSkills, recommendations?.missingSkills]);
-
-  const roleStarterResources = useMemo(() => {
-    if (!overview?.roleId) return [] as StudentResource[];
-    return getRoleStarterResources(overview.roleId, 4);
-  }, [overview?.roleId]);
-
-  const skillGapResources = useMemo(() => {
-    if (!overview?.roleId) return [] as StudentResource[];
-    return getSkillGapResources(overview.roleId, topMissingSkills, 8);
-  }, [overview?.roleId, topMissingSkills]);
-
-  const topResourceRecommendation = useMemo(() => {
-    if (!overview?.roleId) return null;
-    return getTopResourceRecommendation(overview.roleId, topMissingSkills);
-  }, [overview?.roleId, topMissingSkills]);
-
-  const supportPlanResources = useMemo(() => {
-    if (!overview?.roleId) {
-      return {
-        learn: [] as StudentResource[],
-        practice: [] as StudentResource[],
-        build: [] as StudentResource[],
-        interviewPrep: [] as StudentResource[],
-      };
-    }
-    return getSupportPlanResources(overview.roleId, topMissingSkills);
-  }, [overview?.roleId, topMissingSkills]);
-
-  const readiness = useMemo(() => {
-    if (overview?.latestScore) return scoreToPercent(overview.latestScore.score);
-    if (topRecommendedJobs.length > 0) {
-      const avg =
-        topRecommendedJobs.reduce((sum, entry) => sum + scoreToPercent(entry.matchScore), 0) /
-        topRecommendedJobs.length;
-      return Math.round(avg);
-    }
-    return 25;
-  }, [overview?.latestScore, topRecommendedJobs]);
-
-  const targetRole = useMemo(() => {
-    return overview?.role?.name || topRecommendedJobs[0]?.job?.title || 'your selected role';
-  }, [overview?.role?.name, topRecommendedJobs]);
-
-  const roadmapByLevel = useMemo(() => {
-    const grouped: Record<string, Array<{ skill: string; status: RoadmapStatus; level?: string }>> = {
-      beginner: [],
-      intermediate: [],
-      advanced: [],
-      other: [],
-    };
-    (overview?.roadmap || []).forEach((item) => {
-      const level = item.level || 'other';
-      if (!grouped[level]) grouped[level] = [];
-      grouped[level].push(item);
-    });
-    return grouped;
-  }, [overview?.roadmap]);
-
-  const scoreSections = useMemo(() => {
-    const sectionScores = overview?.latestScore?.sectionScores;
-    if (!sectionScores) return [] as Array<{ key: string; label: string; value: number }>;
-
-    return [
-      {
-        key: 'skillsCompleteness',
-        label: 'Skills completeness',
-        value: scoreToPercent(Number(sectionScores.skillsCompleteness ?? sectionScores.skills ?? 0)),
-      },
-      {
-        key: 'experienceRelevance',
-        label: 'Experience relevance',
-        value: scoreToPercent(Number(sectionScores.experienceRelevance ?? sectionScores.experience ?? 0)),
-      },
-      {
-        key: 'projectStrength',
-        label: 'Project quality',
-        value: scoreToPercent(Number(sectionScores.projectStrength ?? sectionScores.projects ?? 0)),
-      },
-      {
-        key: 'formattingConsistency',
-        label: 'Resume structure',
-        value: scoreToPercent(Number(sectionScores.formattingConsistency ?? sectionScores.education ?? 0)),
-      },
-    ];
-  }, [overview?.latestScore?.sectionScores]);
-
-  const scoreTrend = useMemo(() => {
-    const historyScores = (overview?.scoreHistory || []).map((entry) => scoreToPercent(Number(entry.score || 0)));
-    if (historyScores.length === 0) return null;
-
-    const width = 340;
-    const height = 120;
-    const padding = 10;
-    const usableWidth = width - padding * 2;
-    const usableHeight = height - padding * 2;
-    const maxIndex = Math.max(historyScores.length - 1, 1);
-
-    const points = historyScores.map((score, index) => {
-      const x = padding + (index / maxIndex) * usableWidth;
-      const y = padding + (1 - score / 100) * usableHeight;
-      return {
-        x: Number(x.toFixed(2)),
-        y: Number(y.toFixed(2)),
-      };
-    });
-
-    const polyline = points.map((point) => `${point.x},${point.y}`).join(' ');
-    const area = `${padding},${height - padding} ${polyline} ${width - padding},${height - padding}`;
-
-    return { width, height, points, polyline, area };
-  }, [overview?.scoreHistory]);
-
-  const skillCompletionPercent = useMemo(() => {
-    if (!overview?.progress?.totalSkills) return 0;
-    return Math.round((overview.progress.skillsCompleted / overview.progress.totalSkills) * 100);
-  }, [overview?.progress?.skillsCompleted, overview?.progress?.totalSkills]);
-
-  const skillInProgressPercent = useMemo(() => {
-    if (!overview?.progress?.totalSkills) return 0;
-    return Math.round((overview.progress.skillsInProgress / overview.progress.totalSkills) * 100);
-  }, [overview?.progress?.skillsInProgress, overview?.progress?.totalSkills]);
-
-  const trackedApplicationCount = useMemo(() => {
-    const counts = overview?.applicationStatusCounts;
-    if (!counts) return 0;
-    return counts.saved + counts.applied + counts.interviewing + counts.offer + counts.rejected;
-  }, [overview?.applicationStatusCounts]);
-  const firstScoreEntry = overview?.scoreHistory?.[0] || null;
-  const lastScoreEntry =
-    overview?.scoreHistory?.[overview.scoreHistory.length - 1] || null;
-
-  const nextStepCards = useMemo(() => {
-    const cards: Array<{
-      id: string;
-      eyebrow: string;
-      title: string;
-      detail: string;
-      href?: string;
-      external?: boolean;
-      cta: string;
-    }> = [];
-
-    if (topMissingSkills[0]) {
-      cards.push({
-        id: 'gap',
-        eyebrow: 'Close this gap first',
-        title: topMissingSkills[0],
-        detail: `This skill appears in your current roadmap and role-fit gaps. Marking it in progress will improve the rest of your plan.`,
-        cta: 'Update roadmap below',
-      });
-    }
-
-    if (topResourceRecommendation) {
-      cards.push({
-        id: 'resource',
-        eyebrow: 'Study this next',
-        title: topResourceRecommendation.title,
-        detail: topResourceRecommendation.whyItHelps,
-        href: topResourceRecommendation.url,
-        external: true,
-        cta: 'Open resource',
-      });
-    }
-
-    if (topRecommendedJobs[0]) {
-      cards.push({
-        id: 'job',
-        eyebrow: 'Best current opportunity',
-        title: topRecommendedJobs[0].job.title,
-        detail: `${scoreToPercent(topRecommendedJobs[0].matchScore)}% match at ${topRecommendedJobs[0].job.company}.`,
-        href: `/jobs/${topRecommendedJobs[0].job.id}`,
-        cta: 'View job',
-      });
-    }
-
-    return cards.slice(0, 3);
-  }, [topMissingSkills, topRecommendedJobs, topResourceRecommendation]);
+  const {
+    topRecommendedJobs,
+    topMissingSkills,
+    roleStarterResources,
+    skillGapResources,
+    topResourceRecommendation,
+    supportPlanResources,
+    readiness,
+    targetRole,
+    roadmapByLevel,
+    scoreSections,
+    scoreTrend,
+    skillCompletionPercent,
+    skillInProgressPercent,
+    trackedApplicationCount,
+    firstScoreEntry,
+    lastScoreEntry,
+    nextStepCards,
+  } = useStudentUpskillingInsights(recommendations, overview);
 
   const handleRoadmapStatusCycle = async (skillName: string, current: RoadmapStatus) => {
     if (!overview || updatingSkill) return;
@@ -450,7 +210,7 @@ export default function StudentUpskillingHub({
         status: nextStatus,
       });
       setOverview((prev) => (prev ? { ...prev, roadmap: result.roadmap } : prev));
-    } catch (error: any) {
+    } catch (error: unknown) {
       setFeedback({
         tone: 'error',
         text: getReadableErrorMessage(error, 'Unable to update roadmap skill right now.'),
@@ -481,7 +241,7 @@ export default function StudentUpskillingHub({
         tone: 'success',
         text: 'Your profile has been analyzed successfully.',
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       setFeedback({
         tone: 'error',
         text: getReadableErrorMessage(error, 'Unable to analyze your resume right now.'),
@@ -513,7 +273,7 @@ export default function StudentUpskillingHub({
         tone: 'success',
         text: 'Learning track updated. Your roadmap and support resources have been refreshed.',
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       setFeedback({
         tone: 'error',
         text: getReadableErrorMessage(error, 'Unable to switch learning track right now.'),
@@ -531,7 +291,7 @@ export default function StudentUpskillingHub({
       const updatedOverview = await getCareerOverview();
       setOverview(updatedOverview);
       setFeedback({ tone: 'success', text: 'Job saved to your application tracker.' });
-    } catch (error: any) {
+    } catch (error: unknown) {
       setFeedback({
         tone: 'error',
         text: getReadableErrorMessage(error, 'Unable to save this job right now.'),
@@ -557,7 +317,7 @@ export default function StudentUpskillingHub({
             ? 'AI coach response generated.'
             : 'AI fallback guidance generated.',
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       setFeedback({
         tone: 'error',
         text: getReadableErrorMessage(error, 'Unable to generate AI guidance right now.'),
@@ -566,14 +326,6 @@ export default function StudentUpskillingHub({
       setAiLoading(false);
     }
   };
-
-  const feedbackClass =
-    feedback?.tone === 'success'
-      ? 'border-gray-300 bg-gray-100 text-gray-800'
-      : feedback?.tone === 'error'
-        ? 'border-gray-300 bg-gray-100 text-gray-800'
-        : 'border-accent-soft text-accent';
-
   if (loading) {
     return (
       <div className="space-y-8 layout-container section-spacing">
@@ -670,23 +422,9 @@ export default function StudentUpskillingHub({
             </Card>
           </div>
 
-          <AnimatePresence>
-            {feedback && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className={`mt-6 rounded-xl border px-4 py-3 text-sm flex items-center gap-3 ${feedbackClass}`}
-              >
-                {feedback.tone === 'error' ? (
-                  <AlertCircle className="h-5 w-5" />
-                ) : (
-                  <CheckCircle2 className="h-5 w-5" />
-                )}
-                {feedback.text}
-              </motion.div>
-            )}
-          </AnimatePresence>
+      <AnimatePresence>
+        {feedback && <FeedbackBanner feedback={feedback} variant="compact" />}
+      </AnimatePresence>
         </motion.div>
       </div>
     );
@@ -768,38 +506,14 @@ export default function StudentUpskillingHub({
       )}
 
       <AnimatePresence>
-        {feedback && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className={`rounded-2xl border-[0.5px] px-4 py-3 text-sm font-medium font-sans flex flex-wrap items-center gap-3 shadow-sm sm:px-6 sm:py-4 ${feedbackClass}`}
-          >
-            {feedback.tone === 'error' ? <AlertCircle className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
-            {feedback.text}
-          </motion.div>
-        )}
+        {feedback && <FeedbackBanner feedback={feedback} />}
       </AnimatePresence>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card hoverable={false} className="p-5 space-y-2">
-          <p className="text-xs uppercase tracking-[0.12em] text-secondary">Career readiness</p>
-          <p className="text-3xl font-semibold text-primary">{readiness}%</p>
-        </Card>
-        <Card hoverable={false} className="p-5 space-y-2">
-          <p className="text-xs uppercase tracking-[0.12em] text-secondary">Resume improvement</p>
-          <p className="text-3xl font-semibold text-primary">+{overview?.progress?.resumeImprovement || 0}%</p>
-        </Card>
-        <Card hoverable={false} className="p-5 space-y-2">
-          <p className="text-xs uppercase tracking-[0.12em] text-secondary">Skills completed</p>
-          <p className="text-3xl font-semibold text-primary">
-            {overview?.progress?.skillsCompleted || 0}/{overview?.progress?.totalSkills || 0}
-          </p>
-        </Card>
-        <Card hoverable={false} className="p-5 space-y-2">
-          <p className="text-xs uppercase tracking-[0.12em] text-secondary">Applications tracked</p>
-          <p className="text-3xl font-semibold text-primary">{trackedApplicationCount}</p>
-        </Card>
+        <StatCard label="Career readiness" value={`${readiness}%`} />
+        <StatCard label="Resume improvement" value={`+${overview?.progress?.resumeImprovement || 0}%`} />
+        <StatCard label="Skills completed" value={`${overview?.progress?.skillsCompleted || 0}/${overview?.progress?.totalSkills || 0}`} />
+        <StatCard label="Applications tracked" value={trackedApplicationCount} />
       </section>
 
       <section>
@@ -1020,31 +734,7 @@ export default function StudentUpskillingHub({
           </div>
           <div className="grid gap-4 md:grid-cols-3">
             {nextStepCards.map((card) => (
-              <Card key={card.id} hoverable={false} className="p-5 space-y-3">
-                <p className="text-xs uppercase tracking-[0.12em] text-secondary">{card.eyebrow}</p>
-                <h3 className="text-lg font-semibold text-primary">{card.title}</h3>
-                <p className="text-sm text-secondary">{card.detail}</p>
-                {card.href ? (
-                  card.external ? (
-                    <a
-                      href={card.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center text-sm font-semibold text-accent hover:underline"
-                    >
-                      {card.cta} <ArrowUpRight className="ml-1 h-4 w-4" />
-                    </a>
-                  ) : (
-                    <Link href={card.href} className="inline-flex items-center text-sm font-semibold text-accent hover:underline">
-                      {card.cta} <ArrowUpRight className="ml-1 h-4 w-4" />
-                    </Link>
-                  )
-                ) : (
-                  <span className="inline-flex items-center text-sm font-semibold text-accent">
-                    {card.cta}
-                  </span>
-                )}
-              </Card>
+              <NextStepCardView key={card.id} card={card} />
             ))}
           </div>
         </section>
@@ -1147,12 +837,7 @@ export default function StudentUpskillingHub({
                 value={aiFeature}
                 onChange={(event) =>
                   setAiFeature(
-                    event.target.value as
-                      | 'skill_gap'
-                      | 'resume_improvement'
-                      | 'interview_prep'
-                      | 'project_ideas'
-                      | 'study_plan'
+                    event.target.value as AICoachFeature
                   )
                 }
                 className="min-h-[44px] w-full rounded-xl border border-border bg-white px-3 py-2 text-sm"
@@ -1311,37 +996,7 @@ export default function StudentUpskillingHub({
             <div className="grid gap-4 md:grid-cols-2">
               {skillGapResources.length > 0 ? (
                 skillGapResources.map((resource) => (
-                  <div key={resource.id} className="rounded-2xl border border-border bg-white/70 p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h4 className="text-base font-semibold text-primary">{resource.title}</h4>
-                        <p className="text-xs uppercase tracking-[0.12em] text-secondary">{resource.provider}</p>
-                      </div>
-                      <Badge variant="secondary">{resource.level.replace('_', ' ')}</Badge>
-                    </div>
-                    <p className="text-sm text-secondary">{resource.description}</p>
-                    <div className="flex flex-wrap gap-2">
-                      {resource.skills.slice(0, 4).map((skill) => (
-                        <span
-                          key={`${resource.id}-${skill}`}
-                          className="rounded-full border border-border bg-white px-2.5 py-1 text-[11px] text-secondary"
-                        >
-                          {skill}
-                        </span>
-                      ))}
-                    </div>
-                    <p className="text-sm text-secondary">
-                      <span className="font-semibold text-primary">Why this helps:</span> {resource.whyItHelps}
-                    </p>
-                    <a
-                      href={resource.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center text-sm font-semibold text-accent hover:underline"
-                    >
-                      Open resource <ArrowUpRight className="ml-1 h-4 w-4" />
-                    </a>
-                  </div>
+                  <SkillGapResourceCard key={resource.id} resource={resource} />
                 ))
               ) : (
                 <p className="text-sm text-secondary">No extra resources are needed right now. Your gaps are already narrow.</p>
@@ -1357,22 +1012,7 @@ export default function StudentUpskillingHub({
 
             <div className="space-y-3">
               {roleStarterResources.map((resource) => (
-                <a
-                  key={resource.id}
-                  href={resource.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block rounded-2xl border border-border bg-white/70 p-4 transition hover:bg-white"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-sm font-semibold text-primary">{resource.title}</h4>
-                      <p className="mt-1 text-sm text-secondary">{resource.provider}</p>
-                    </div>
-                    <ArrowUpRight className="h-4 w-4 text-accent" />
-                  </div>
-                  <p className="mt-2 text-sm text-secondary">{resource.whyItHelps}</p>
-                </a>
+                <StarterResourceLink key={resource.id} resource={resource} />
               ))}
             </div>
 
@@ -1397,86 +1037,13 @@ export default function StudentUpskillingHub({
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           {topRecommendedJobs.length > 0 ? (
             topRecommendedJobs.map((entry) => {
-              const match = scoreToPercent(entry.matchScore);
-              const requiredSkills =
-                entry.requiredSkills && entry.requiredSkills.length > 0
-                  ? entry.requiredSkills
-                  : Array.isArray(entry.job.skills)
-                    ? entry.job.skills
-                    : [];
-
               return (
-                <div
+                <JobRecommendationCard
                   key={entry.job.id}
-                  className="p-6 rounded-3xl border-[0.5px] border-border bg-white/50 hover:bg-white transition-all shadow-sm hover:shadow-xl hover:-translate-y-1 flex flex-col group"
-                >
-                  <div className="mb-4 flex items-start justify-between gap-4">
-                    <div>
-                      <h3 className="text-xl font-serif font-bold text-primary line-clamp-1 mb-1 group-hover:text-accent transition-colors">
-                        {entry.job.title}
-                      </h3>
-                      <p className="text-sm text-secondary uppercase tracking-widest font-semibold">
-                        {entry.job.company}
-                      </p>
-                    </div>
-                    <Badge variant={match > 75 ? 'success' : match > 50 ? 'warning' : 'secondary'}>
-                      {match}% Match
-                    </Badge>
-                  </div>
-
-                  <p className="text-sm font-light text-secondary mb-4 line-clamp-3 leading-relaxed">
-                    {oneLine(entry.job.description, 160)}
-                  </p>
-
-                  {requiredSkills.length > 0 && (
-                    <div className="mb-3">
-                      <p className="mb-2 text-[11px] uppercase tracking-[0.12em] text-secondary">Required</p>
-                      <div className="flex flex-wrap gap-2">
-                        {requiredSkills.slice(0, 4).map((skill) => (
-                          <span key={`${entry.job.id}-required-${skill}`} className="rounded-full border border-border bg-white/80 px-2.5 py-1 text-[11px] text-secondary">
-                            {skill}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {entry.missingSkills?.length > 0 && (
-                    <div className="mb-5">
-                      <p className="mb-2 text-[11px] uppercase tracking-[0.12em] text-secondary">Missing</p>
-                      <div className="flex flex-wrap gap-2">
-                        {entry.missingSkills.slice(0, 3).map((skill) => (
-                          <span key={`${entry.job.id}-missing-${skill}`} className="rounded-full border border-gray-300 bg-gray-100 px-2.5 py-1 text-[11px] text-gray-800">
-                            {skill}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-auto grid gap-2">
-                    <Link href={`/jobs/${entry.job.id}`}>
-                      <Button variant="outline" size="sm" className="w-full rounded-xl">
-                        View Job
-                      </Button>
-                    </Link>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full rounded-xl"
-                      disabled={savingJobId === entry.job.id}
-                      onClick={() => void handleSaveJob(entry.job.id)}
-                    >
-                      {savingJobId === entry.job.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <BookmarkPlus className="mr-2 h-4 w-4" /> Save for later
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </div>
+                  entry={entry}
+                  savingJobId={savingJobId}
+                  onSave={(jobId) => void handleSaveJob(jobId)}
+                />
               );
             })
           ) : (
@@ -1491,4 +1058,3 @@ export default function StudentUpskillingHub({
     </div>
   );
 }
-

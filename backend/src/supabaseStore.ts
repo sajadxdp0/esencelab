@@ -10,133 +10,24 @@
  * 2. load remote tables into the in-memory runtime shape at startup
  * 3. persist writes from the API routes back into Supabase
  */
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
-type AnyRecord = Record<string, any>;
-type QueryResult<T = any> = { data: T | null; error: any };
-
-const RETRYABLE_STATUS_CODES = new Set([
-  408, 409, 425, 429, 500, 502, 503, 504,
-]);
-const RETRYABLE_ERROR_CODES = new Set([
-  "aborted",
-  "eai_again",
-  "econnaborted",
-  "econnrefused",
-  "econnreset",
-  "enetdown",
-  "enetreset",
-  "enetwork",
-  "enotfound",
-  "etimedout",
-]);
-const RETRYABLE_MESSAGE_FRAGMENTS = [
-  "connection terminated unexpectedly",
-  "dns lookup timed out",
-  "fetch failed",
-  "network request failed",
-  "network timeout",
-  "socket hang up",
-  "timed out",
-  "timeout",
-  "too many requests",
-  "try again later",
-];
-const TRANSIENT_RETRY_DELAYS_MS = [150, 450, 900];
-const SUPABASE_BOOTSTRAP_PAGE_SIZE = Math.max(
-  100,
-  Math.min(1000, Number(process.env.SUPABASE_BOOTSTRAP_PAGE_SIZE || 1000)),
-);
-
-const toArray = (value: any): string[] => {
-  if (Array.isArray(value)) {
-    return value.filter(Boolean).map((item) => String(item));
-  }
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
-};
-
-const toDate = (value: any): Date => {
-  const date = value ? new Date(value) : new Date();
-  return Number.isNaN(date.getTime()) ? new Date() : date;
-};
-
-const toIso = (value: any): string => {
-  const date = toDate(value);
-  return date.toISOString();
-};
-
-const toNumberOrNull = (value: any): number | null => {
-  if (value === null || value === undefined || value === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const toNumberOrZero = (value: any): number => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const toJsonArray = (value: any): any[] => {
-  if (Array.isArray(value)) return value;
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return value
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-    }
-  }
-  return [];
-};
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const stringifyError = (error: any): string => {
-  if (!error) return "Unknown error";
-  if (typeof error === "string") return error;
-
-  const message = error.message || error.details || error.hint || String(error);
-  const code =
-    error.code || error.status || error.statusCode || error.cause?.code;
-  return code ? `${message} (code: ${code})` : String(message);
-};
-
-const getErrorStatus = (error: any): number | null => {
-  const raw = error?.status ?? error?.statusCode ?? error?.code;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const getErrorCode = (error: any): string => {
-  return String(error?.code || error?.cause?.code || "")
-    .trim()
-    .toLowerCase();
-};
-
-const isRetryableError = (error: any): boolean => {
-  const status = getErrorStatus(error);
-  if (status !== null && RETRYABLE_STATUS_CODES.has(status)) {
-    return true;
-  }
-
-  const code = getErrorCode(error);
-  if (code && RETRYABLE_ERROR_CODES.has(code)) {
-    return true;
-  }
-
-  const message = stringifyError(error).toLowerCase();
-  return RETRYABLE_MESSAGE_FRAGMENTS.some((fragment) =>
-    message.includes(fragment),
-  );
-};
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  AnyRecord,
+  QueryResult,
+  TRANSIENT_RETRY_DELAYS_MS,
+  SUPABASE_BOOTSTRAP_PAGE_SIZE,
+  delay,
+  getErrorCode,
+  getErrorStatus,
+  isRetryableError,
+  stringifyError,
+  toArray,
+  toDate,
+  toIso,
+  toJsonArray,
+  toNumberOrNull,
+  toNumberOrZero,
+} from "./supabaseStoreHelpers";
 
 export class SupabaseStore {
   private client: SupabaseClient | null = null;
@@ -180,11 +71,11 @@ export class SupabaseStore {
     this.active = true;
   }
 
-  isActive() {
+  isActive(): boolean {
     return this.active && !!this.client;
   }
 
-  private disableWithError(error: any, context?: string) {
+  private disableWithError(error: any, context?: string): void {
     this.active = false;
     const prefix = context
       ? `Supabase store disabled during ${context}:`
@@ -257,7 +148,7 @@ export class SupabaseStore {
     return !isRetryableError(error);
   }
 
-  async bootstrap(db: AnyRecord) {
+  async bootstrap(db: AnyRecord): Promise<{ mode: string; loaded: boolean }> {
     if (this.mockMode) {
       return { mode: "supabase_mock", loaded: false };
     }
@@ -518,7 +409,7 @@ export class SupabaseStore {
     }
   }
 
-  private async upsert(table: string, payload: AnyRecord, onConflict = "id") {
+  private async upsert(table: string, payload: AnyRecord, onConflict = "id"): Promise<void> {
     if (!this.isActive() || !this.client) return;
     try {
       await this.runWithRetry(`upsert.${table}`, async () => {
@@ -537,7 +428,7 @@ export class SupabaseStore {
     }
   }
 
-  private async delete(table: string, column: string, value: string) {
+  private async delete(table: string, column: string, value: string): Promise<void> {
     if (!this.isActive() || !this.client) return;
     try {
       await this.runWithRetry(`delete.${table}`, async () => {
@@ -556,7 +447,7 @@ export class SupabaseStore {
     }
   }
 
-  async upsertUser(profile: AnyRecord) {
+  async upsertUser(profile: AnyRecord): Promise<void> {
     await this.upsert("users", {
       id: profile.id,
       email: profile.email,
@@ -570,11 +461,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteUser(id: string) {
+  async deleteUser(id: string): Promise<void> {
     await this.delete("users", "id", id);
   }
 
-  async upsertResume(resume: AnyRecord) {
+  async upsertResume(resume: AnyRecord): Promise<void> {
     await this.upsert("resumes", {
       id: resume.id,
       user_id: resume.userId,
@@ -593,15 +484,15 @@ export class SupabaseStore {
     });
   }
 
-  async deleteResume(id: string) {
+  async deleteResume(id: string): Promise<void> {
     await this.delete("resumes", "id", id);
   }
 
-  async deleteResumesByUser(userId: string) {
+  async deleteResumesByUser(userId: string): Promise<void> {
     await this.delete("resumes", "user_id", userId);
   }
 
-  async upsertCandidate(candidate: AnyRecord) {
+  async upsertCandidate(candidate: AnyRecord): Promise<void> {
     await this.upsert("candidates", {
       id: candidate.id,
       user_id: candidate.userId,
@@ -619,11 +510,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteCandidatesByUser(userId: string) {
+  async deleteCandidatesByUser(userId: string): Promise<void> {
     await this.delete("candidates", "user_id", userId);
   }
 
-  async upsertJob(job: AnyRecord) {
+  async upsertJob(job: AnyRecord): Promise<void> {
     await this.upsert("jobs", {
       id: job.id,
       employer_id: job.employerId,
@@ -643,11 +534,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteJob(id: string) {
+  async deleteJob(id: string): Promise<void> {
     await this.delete("jobs", "id", id);
   }
 
-  async upsertApplication(application: AnyRecord) {
+  async upsertApplication(application: AnyRecord): Promise<void> {
     await this.upsert("applications", {
       id: application.id,
       job_id: application.jobId,
@@ -663,19 +554,19 @@ export class SupabaseStore {
     });
   }
 
-  async deleteApplicationsByJob(jobId: string) {
+  async deleteApplicationsByJob(jobId: string): Promise<void> {
     await this.delete("applications", "job_id", jobId);
   }
 
-  async deleteApplicationsByCandidate(candidateId: string) {
+  async deleteApplicationsByCandidate(candidateId: string): Promise<void> {
     await this.delete("applications", "candidate_id", candidateId);
   }
 
-  async deleteApplication(id: string) {
+  async deleteApplication(id: string): Promise<void> {
     await this.delete("applications", "id", id);
   }
 
-  async upsertCourse(course: AnyRecord) {
+  async upsertCourse(course: AnyRecord): Promise<void> {
     await this.upsert("courses", {
       id: course.id,
       title: course.title,
@@ -691,11 +582,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteCourse(id: string) {
+  async deleteCourse(id: string): Promise<void> {
     await this.delete("courses", "id", id);
   }
 
-  async upsertRecommendation(recommendation: AnyRecord) {
+  async upsertRecommendation(recommendation: AnyRecord): Promise<void> {
     await this.upsert("recommendations", {
       id: recommendation.id,
       user_id: recommendation.userId,
@@ -708,11 +599,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteRecommendationsByUser(userId: string) {
+  async deleteRecommendationsByUser(userId: string): Promise<void> {
     await this.delete("recommendations", "user_id", userId);
   }
 
-  async upsertResumeScore(score: AnyRecord) {
+  async upsertResumeScore(score: AnyRecord): Promise<void> {
     await this.upsert("resume_scores", {
       id: score.id,
       user_id: score.userId,
@@ -724,11 +615,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteResumeScoresByUser(userId: string) {
+  async deleteResumeScoresByUser(userId: string): Promise<void> {
     await this.delete("resume_scores", "user_id", userId);
   }
 
-  async upsertSkillProgress(progress: AnyRecord) {
+  async upsertSkillProgress(progress: AnyRecord): Promise<void> {
     await this.upsert("skill_progress", {
       id: progress.id,
       user_id: progress.userId,
@@ -740,11 +631,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteSkillProgressByUser(userId: string) {
+  async deleteSkillProgressByUser(userId: string): Promise<void> {
     await this.delete("skill_progress", "user_id", userId);
   }
 
-  async upsertLearningPlan(plan: AnyRecord) {
+  async upsertLearningPlan(plan: AnyRecord): Promise<void> {
     await this.upsert("learning_plans", {
       id: plan.id,
       user_id: plan.userId,
@@ -756,11 +647,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteLearningPlansByUser(userId: string) {
+  async deleteLearningPlansByUser(userId: string): Promise<void> {
     await this.delete("learning_plans", "user_id", userId);
   }
 
-  async upsertMockInterviewSession(session: AnyRecord) {
+  async upsertMockInterviewSession(session: AnyRecord): Promise<void> {
     await this.upsert("mock_interview_sessions", {
       id: session.id,
       user_id: session.userId,
@@ -772,11 +663,11 @@ export class SupabaseStore {
     });
   }
 
-  async deleteMockInterviewSessionsByUser(userId: string) {
+  async deleteMockInterviewSessionsByUser(userId: string): Promise<void> {
     await this.delete("mock_interview_sessions", "user_id", userId);
   }
 
-  async upsertSavedJob(saved: AnyRecord) {
+  async upsertSavedJob(saved: AnyRecord): Promise<void> {
     await this.upsert("saved_jobs", {
       id: saved.id,
       user_id: saved.userId,
@@ -785,15 +676,15 @@ export class SupabaseStore {
     });
   }
 
-  async deleteSavedJob(id: string) {
+  async deleteSavedJob(id: string): Promise<void> {
     await this.delete("saved_jobs", "id", id);
   }
 
-  async deleteSavedJobsByUser(userId: string) {
+  async deleteSavedJobsByUser(userId: string): Promise<void> {
     await this.delete("saved_jobs", "user_id", userId);
   }
 
-  async upsertCareerPreference(preference: AnyRecord) {
+  async upsertCareerPreference(preference: AnyRecord): Promise<void> {
     await this.upsert(
       "career_preferences",
       {
@@ -805,11 +696,11 @@ export class SupabaseStore {
     );
   }
 
-  async deleteCareerPreference(userId: string) {
+  async deleteCareerPreference(userId: string): Promise<void> {
     return this.delete("career_preferences", "user_id", userId);
   }
 
-  async upsertRecruiterAccessRequest(request: AnyRecord) {
+  async upsertRecruiterAccessRequest(request: AnyRecord): Promise<void> {
     return this.upsert("recruiter_access_requests", {
       id: request.id,
       name: request.name,
@@ -828,7 +719,7 @@ export class SupabaseStore {
     });
   }
 
-  async insertAdminLog(log: AnyRecord) {
+  async insertAdminLog(log: AnyRecord): Promise<void> {
     if (!this.isActive() || !this.client) return;
     try {
       const { error } = await this.client.from("admin_logs").insert({

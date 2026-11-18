@@ -1,108 +1,26 @@
 # EsenceLab
 
-[![CI](https://github.com/sajadxdp/esencelab/actions/workflows/ci.yml/badge.svg)](https://github.com/sajadxdp/esencelab/actions/workflows/ci.yml)
+Resume in, structured skills out, job match computed, recruiter shortlist behind it.
 
-**Resume in, structured skills out, job match computed, recruiter shortlist right behind it.**
+Three deployables: a Next.js frontend, an Express API with JWT auth and RBAC, and a FastAPI service that parses resumes and matches them to jobs. Scoring is deterministic first, with an optional LLM assist.
 
-A hiring product in three deployables: Next.js frontend, Express API with JWT auth and RBAC, and a FastAPI service that parses resumes and matches them to jobs. Deterministic scoring first (skill overlap × 0.55 + TF-IDF × 0.45) with an optional LLM assist (Groq) and a local fallback, so the product works with or without an AI key.
+TypeScript · Next.js · Express · FastAPI · PostgreSQL
 
-| | |
-|---|---|
-| Stack | TypeScript, Next.js, Express, FastAPI, PostgreSQL (Supabase managed), Docker |
-| Auth | JWT + RBAC (student / recruiter / admin), bcrypt, request IDs |
-| AI | `/ai/parse-resume` and `/ai/match` with internal service token; deterministic fallback |
-| CI | Four jobs: schema contract, backend, frontend, AI service |
-| Deploy | Per-service Dockerfiles + `render.yaml` + Vercel frontend |
-
-**Where to look first**
-
-- `backend/src/index.ts` — the production API (~6K lines); `docs/ARCHITECTURE.md` maps the planned split into routes, services, and stores
-- `ai-service/app/main.py` — resume parse and job match endpoints with graceful local fallback
-- `backend/test/rbac-smoke.test.js` — the RBAC contract that fails when authorization loosens
-- `scripts/verify-supabase-schema.js` — schema contract checked in CI
-
-## Demo
-
-![EsenceLab resume parse demo](ai-service/docs/demo.gif)
-
-Recorded live: the FastAPI service boots, a synthetic sample resume (`ai-service/docs/demo_resume.pdf`) is uploaded to `/ai/parse-resume`, and the parser returns structured JSON — name, education, experience, and skill extraction — with no API key needed locally.
-
-## Problem
-
-Students can't map resumes to skill gaps; recruiters screen manually; admins lack one control surface.
-
-## Solution
-
-Three deployables demonstrating multi-service product engineering, kept to one meaningful AI workflow (resume parse + match). Secondary LMS/coach/admin features are de-emphasized.
-
-## Architecture
-
-```text
-Frontend (Next.js)
-  ↓
-API (Express, JWT + RBAC, rate limits, request IDs)
-  ↓
-PostgreSQL (Supabase-managed: users, resumes, candidates, jobs, applications)
-  ↓
-AI service (FastAPI: /ai/parse-resume, /ai/match)
-```
-
-Service calls are synchronous `fetch` with `x-internal-service-token` and 8–12s timeouts (no queues yet).
-
-## Key Engineering Decisions
-
-1. Supabase as managed PostgreSQL; authorization in Express (RLS policies are permissive `USING(true)` — documented, not relied on).
-2. Gated recruiter onboarding: request → admin approve → temp password → login.
-3. Deterministic parse/match first (`overlap*0.55 + TF-IDF*0.45` with fallbacks); Groq optional with local fallback, removable.
-4. Per-endpoint in-memory metrics + `/api/health`; no external APM (documented gap).
-5. Docker per service + `render.yaml` + Vercel frontend + 4-job CI.
-
-## Tech Stack
-
-TypeScript · Next.js · Express · Python FastAPI · PostgreSQL · Docker
-
-## Features
-
-1. Auth + RBAC (student/recruiter/admin)
-2. Resume upload (PDF, 4MB) + structured parse
-3. Jobs CRUD + applications
-4. Skill-overlap + TF-IDF match with explanations
-5. Gated recruiter flow + admin review
-6. Health/monitoring endpoints
-
-## Running Locally
-
-```powershell
-# Windows PowerShell (ports 3100/3101/3102)
-.\run-frontend-3100.ps1
-.\run-backend-3101.ps1
-.\run-ai-3102.ps1
-```
-
-Linux: `cd frontend && npm ci && npm run dev`; `cd backend && npm ci && npm run dev`; `cd ai-service && pip install -r requirements.txt && uvicorn app.main:app --port 3102`. Configure `JWT_SECRET`, `AI_INTERNAL_AUTH_TOKEN`, `SUPABASE_*`, `AI_SERVICE_URL`.
-
-## Testing
+## Run
 
 ```bash
-cd backend && npm run test:all   # RBAC smoke + stress (SUPABASE_MOCK=1)
-cd ../ai-service && python -m unittest tests.smoke_test
-node scripts/verify-supabase-schema.js
+cd frontend && npm ci && npm run dev
+cd ../backend && npm ci && npm run dev
+cd ../ai-service && pip install -r requirements.txt && uvicorn app.main:app --port 3102
 ```
 
-## Performance
+Configure `JWT_SECRET`, `AI_INTERNAL_AUTH_TOKEN`, and `SUPABASE_*` from the `.env.example` files.
 
-No published benchmarks. Only thresholds (e.g. slow-endpoint 1200ms, p95 alert 2500ms) — not measurements.
+## Test
 
-## Limitations
+```bash
+cd backend && npm run test:all
+cd ../ai-service && python -m unittest tests.smoke_test
+```
 
-`backend/src/index.ts` is a ~6K-line monolith (split planned in `docs/ARCHITECTURE.md`); no background workers; RLS permissive; monitoring in-memory; secondary features (roadmaps, courses, mock interviews, coach, analytics) hidden from this story.
-
-## Future Improvements
-
-Split API into routes/services/stores; harden RLS or document managed-PG choice; add queue for AI calls; external observability; expand tests beyond RBAC/smoke.
-
----
-
-## Maintenance
-
-Last maintained: 2026-10-26 – CI audit gate fixed (backend 0 vulns, frontend audits shipped deps); stale path in PRODUCT.md corrected; all service builds re-verified.
+Architecture notes live in [docs](docs/ARCHITECTURE.md).
