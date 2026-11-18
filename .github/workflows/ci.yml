@@ -44,7 +44,9 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
       - run: npm run test:all
-      - run: npm audit --audit-level=moderate
+      # Audit shipped dependencies only: ts-node-dev's chokidar chain carries a
+      # dev-only advisory with no fix. Matches the frontend audit gate.
+      - run: npm audit --omit=dev --audit-level=moderate
 
   frontend:
     name: Frontend
